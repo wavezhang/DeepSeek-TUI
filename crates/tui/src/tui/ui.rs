@@ -5918,9 +5918,9 @@ fn render(f: &mut Frame, app: &mut App) {
         composer_widget.render(chunks[4], buf);
         composer_widget.cursor_pos(chunks[4])
     };
-    app.viewport.last_composer_area = Some(chunks[3]);
+    app.viewport.last_composer_area = Some(chunks[4]);
     {
-        let area = chunks[3];
+        let area = chunks[4];
         let has_panel = app.composer_border && area.height >= 3 && area.width >= 12;
         let inner = if has_panel {
             ratatui::widgets::Block::default()
