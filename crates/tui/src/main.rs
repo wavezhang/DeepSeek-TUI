@@ -2218,6 +2218,25 @@ async fn run_doctor(config: &Config, workspace: &Path, config_path_override: Opt
     println!("  workspace: {}", crate::utils::display_path(workspace));
     println!("  {}", doctor_search_provider_line(config));
 
+    // TLS certificate verification
+    if config.resolve_insecure_skip_tls_verify() {
+        println!();
+        println!(
+            "{} {}",
+            "!".truecolor(sky_r, sky_g, sky_b).bold(),
+            "TLS certificate verification is DISABLED".bold()
+        );
+        println!(
+            "    insecure_skip_tls_verify = true — all outbound HTTPS requests will accept"
+        );
+        println!(
+            "    untrusted certificates. This setting is intended for development and trusted"
+        );
+        println!(
+            "    internal networks only. In production, keep this disabled (default)."
+        );
+    }
+
     // State root (v0.8.44)
     println!();
     println!("{}", "State Root:".bold());
