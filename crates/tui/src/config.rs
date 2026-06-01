@@ -1529,6 +1529,7 @@ impl Config {
                 "TLS certificate verification is disabled (insecure_skip_tls_verify = true). \
                  This is insecure and should only be used for development or trusted internal servers."
             );
+            log_sensitive_event("security.tls.insecure", json!({"insecure_skip_tls_verify": true}));
         }
     }
 

@@ -1837,7 +1837,6 @@ struct EnvRuntimeOverrides {
     sglang_base_url: Option<String>,
     vllm_base_url: Option<String>,
     ollama_base_url: Option<String>,
-    insecure_skip_tls_verify: Option<bool>,
 }
 
 impl EnvRuntimeOverrides {
@@ -1919,9 +1918,6 @@ impl EnvRuntimeOverrides {
             ollama_base_url: std::env::var("OLLAMA_BASE_URL")
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
-            insecure_skip_tls_verify: std::env::var("DEEPSEEK_INSECURE_SKIP_TLS_VERIFY")
-                .ok()
-                .and_then(|v| parse_bool(&v).ok()),
         }
     }
 
