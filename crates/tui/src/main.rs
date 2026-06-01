@@ -2223,22 +2223,33 @@ async fn run_doctor(config: &Config, workspace: &Path, config_path_override: Opt
     println!("  {}", doctor_search_provider_line(config));
 
     // TLS certificate verification
-    if config.resolve_insecure_skip_tls_verify() {
+    let global_tls = config.insecure_skip_tls_verify.unwrap_or(false);
+    let active_provider = config.api_provider();
+    let active_tls = config.insecure_skip_tls_verify_for_provider(active_provider);
+    if global_tls || active_tls {
         println!();
         println!(
             "{} {}",
             "!".truecolor(sky_r, sky_g, sky_b).bold(),
             "TLS certificate verification is DISABLED".bold()
         );
+        if global_tls {
+            println!(
+                "    global: insecure_skip_tls_verify = true — all outbound HTTPS requests \
+                 will accept untrusted certificates."
+            );
+        }
+        if active_tls && !global_tls {
+            println!(
+                "    provider ({:?}): insecure_skip_tls_verify = true — API requests to \
+                 this provider only will accept untrusted certificates.",
+                active_provider
+            );
+        }
         println!(
-            "    insecure_skip_tls_verify = true — all outbound HTTPS requests will accept"
+            "    This setting is intended for development and trusted internal networks only."
         );
-        println!(
-            "    untrusted certificates. This setting is intended for development and trusted"
-        );
-        println!(
-            "    internal networks only. In production, keep this disabled (default)."
-        );
+        println!("    In production, keep this disabled (default).");
     }
 
     // State root (v0.8.44)
@@ -3291,6 +3302,11 @@ fn run_doctor_json(
         "api_connectivity": {
             "checked": false,
             "note": "Skipped in --json mode; run `codewhale doctor` for a live check.",
+        },
+        "tls": {
+            "global_insecure_skip_tls_verify": config.insecure_skip_tls_verify.unwrap_or(false),
+            "active_provider": config.api_provider().as_str(),
+            "active_provider_insecure_skip_tls_verify": config.insecure_skip_tls_verify_for_provider(config.api_provider()),
         },
         "capability": provider_capability_report(config),
     });

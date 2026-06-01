@@ -162,6 +162,13 @@ pub struct ProviderConfigToml {
     pub auth_mode: Option<String>,
     #[serde(default)]
     pub http_headers: BTreeMap<String, String>,
+    /// Skip TLS certificate verification for outbound HTTPS requests to
+    /// this specific provider. Defaults to the global
+    /// `insecure_skip_tls_verify` when unset (which itself defaults to
+    /// `false`). Set to `true` only when this provider uses self-signed or
+    /// untrusted certificates.
+    #[serde(default)]
+    pub insecure_skip_tls_verify: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -1174,11 +1181,30 @@ impl ConfigToml {
 
     /// Resolve `insecure_skip_tls_verify` considering the environment variable
     /// override first, then the config file value, defaulting to `false`.
+    /// This is the global fallback — for provider-scoped resolution use
+    /// [`resolve_insecure_skip_tls_verify_for`](Self::resolve_insecure_skip_tls_verify_for).
     #[must_use]
     pub fn resolve_insecure_skip_tls_verify(&self) -> bool {
         std::env::var("DEEPSEEK_INSECURE_SKIP_TLS_VERIFY")
             .ok()
             .and_then(|v| parse_bool(&v).ok())
+            .or(self.insecure_skip_tls_verify)
+            .unwrap_or(false)
+    }
+
+    /// Resolve `insecure_skip_tls_verify` for a specific provider.
+    ///
+    /// Priority: environment variable > per-provider config > global config > `false`.
+    #[must_use]
+    pub fn resolve_insecure_skip_tls_verify_for(&self, provider: ProviderKind) -> bool {
+        std::env::var("DEEPSEEK_INSECURE_SKIP_TLS_VERIFY")
+            .ok()
+            .and_then(|v| parse_bool(&v).ok())
+            .or_else(|| {
+                self.providers
+                    .for_provider(provider)
+                    .insecure_skip_tls_verify
+            })
             .or(self.insecure_skip_tls_verify)
             .unwrap_or(false)
     }
@@ -4165,5 +4191,45 @@ unix_socket_path = "/tmp/cw-hooks.sock"
         )
         .expect("config toml");
         assert_eq!(config.insecure_skip_tls_verify, Some(true));
+    }
+
+    #[test]
+    fn insecure_skip_tls_verify_for_provider_resolves_correctly() {
+        let config: ConfigToml = toml::from_str(
+            r#"
+            [providers.ollama]
+            insecure_skip_tls_verify = true
+            "#,
+        )
+        .expect("config toml");
+
+        // Per-provider true
+        assert!(config.resolve_insecure_skip_tls_verify_for(ProviderKind::Ollama));
+        // Unset provider falls back to global (false)
+        assert!(!config.resolve_insecure_skip_tls_verify_for(ProviderKind::Deepseek));
+    }
+
+    #[test]
+    fn insecure_skip_tls_verify_for_provider_falls_back_to_global() {
+        let config: ConfigToml = toml::from_str(
+            r#"
+            insecure_skip_tls_verify = true
+            [providers.ollama]
+            insecure_skip_tls_verify = false
+            "#,
+        )
+        .expect("config toml");
+
+        // Per-provider false overrides global true
+        assert!(!config.resolve_insecure_skip_tls_verify_for(ProviderKind::Ollama));
+        // Provider without explicit setting uses global
+        assert!(config.resolve_insecure_skip_tls_verify_for(ProviderKind::Deepseek));
+    }
+
+    #[test]
+    fn insecure_skip_tls_verify_for_provider_defaults_to_false() {
+        let config: ConfigToml = toml::from_str("").expect("config toml");
+        assert!(!config.resolve_insecure_skip_tls_verify_for(ProviderKind::Ollama));
+        assert!(!config.resolve_insecure_skip_tls_verify_for(ProviderKind::Deepseek));
     }
 }

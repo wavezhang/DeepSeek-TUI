@@ -488,7 +488,7 @@ impl DeepSeekClient {
             retry.enabled, retry.max_retries, retry.initial_delay, retry.max_delay
         ));
 
-        let skip_verify = config.insecure_skip_tls_verify.unwrap_or(false);
+        let skip_verify = config.insecure_skip_tls_verify_for_provider(api_provider);
         let http_client = Self::build_http_client(&api_key, &http_headers, skip_verify)?;
 
         Ok(Self {

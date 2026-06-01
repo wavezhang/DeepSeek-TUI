@@ -1671,6 +1671,11 @@ pub struct ProviderConfig {
     pub model: Option<String>,
     pub auth_mode: Option<String>,
     pub http_headers: Option<HashMap<String, String>>,
+    /// Per-provider TLS override. When `Some(true)`, skips certificate
+    /// verification for this provider only. Falls back to the global
+    /// `insecure_skip_tls_verify` when `None`.
+    #[serde(default)]
+    pub insecure_skip_tls_verify: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -1884,6 +1889,40 @@ impl Config {
             );
             log_sensitive_event("security.tls.insecure", json!({"insecure_skip_tls_verify": true}));
         }
+        // Warn per-provider
+        if let Some(ref providers) = self.providers {
+            for (name, cfg) in [
+                ("providers.deepseek", &providers.deepseek),
+                ("providers.deepseek_cn", &providers.deepseek_cn),
+                ("providers.nvidia_nim", &providers.nvidia_nim),
+                ("providers.openai", &providers.openai),
+                ("providers.atlascloud", &providers.atlascloud),
+                ("providers.wanjie_ark", &providers.wanjie_ark),
+                ("providers.openrouter", &providers.openrouter),
+                ("providers.xiaomi_mimo", &providers.xiaomi_mimo),
+                ("providers.novita", &providers.novita),
+                ("providers.fireworks", &providers.fireworks),
+                ("providers.siliconflow", &providers.siliconflow),
+                ("providers.moonshot", &providers.moonshot),
+                ("providers.sglang", &providers.sglang),
+                ("providers.vllm", &providers.vllm),
+                ("providers.ollama", &providers.ollama),
+                ("providers.volcengine", &providers.volcengine),
+            ] {
+                if cfg.insecure_skip_tls_verify == Some(true) {
+                    tracing::warn!(
+                        "TLS certificate verification is disabled for {name} \
+                         (insecure_skip_tls_verify = true). \
+                         This is insecure and should only be used for development \
+                         or trusted internal servers."
+                    );
+                    log_sensitive_event(
+                        "security.tls.insecure",
+                        json!({"insecure_skip_tls_verify": true, "provider": name}),
+                    );
+                }
+            }
+        }
     }
 
     /// Validate that critical config fields are present.
@@ -2026,6 +2065,23 @@ impl Config {
 
     pub(crate) fn provider_config(&self) -> Option<&ProviderConfig> {
         self.provider_config_for(self.api_provider())
+    }
+
+    /// Resolve `insecure_skip_tls_verify` for a specific provider.
+    ///
+    /// Priority: `DEEPSEEK_INSECURE_SKIP_TLS_VERIFY` env var > per-provider
+    /// config > global `insecure_skip_tls_verify` > `false`.
+    #[must_use]
+    pub fn insecure_skip_tls_verify_for_provider(&self, provider: ApiProvider) -> bool {
+        std::env::var("DEEPSEEK_INSECURE_SKIP_TLS_VERIFY")
+            .ok()
+            .and_then(|v| codewhale_config::parse_bool(&v).ok())
+            .or_else(|| {
+                self.provider_config_for(provider)
+                    .and_then(|p| p.insecure_skip_tls_verify)
+            })
+            .or(self.insecure_skip_tls_verify)
+            .unwrap_or(false)
     }
 
     #[must_use]
@@ -3860,6 +3916,7 @@ fn merge_provider_config(base: ProviderConfig, override_cfg: ProviderConfig) -> 
         model: override_cfg.model.or(base.model),
         auth_mode: override_cfg.auth_mode.or(base.auth_mode),
         http_headers: override_cfg.http_headers.or(base.http_headers),
+        insecure_skip_tls_verify: override_cfg.insecure_skip_tls_verify.or(base.insecure_skip_tls_verify),
     }
 }
 
