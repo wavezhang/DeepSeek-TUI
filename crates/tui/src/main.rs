@@ -5425,7 +5425,7 @@ async fn run_exec_agent(
         search_api_key: config.search.as_ref().and_then(|s| s.api_key.clone()),
         tools_always_load: config.tools_always_load(),
         tools: config.tools.clone(),
-        insecure_skip_tls_verify: config.insecure_skip_tls_verify.unwrap_or(false),
+        insecure_skip_tls_verify: config.insecure_skip_tls_verify_for_provider(config.api_provider()),
     };
 
     let engine_handle = spawn_engine(engine_config, config);
