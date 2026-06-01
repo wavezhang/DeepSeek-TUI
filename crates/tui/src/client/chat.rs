@@ -14,6 +14,8 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tokio::time::timeout as tokio_timeout;
 
+use crate::config::wire_model_for_provider;
+
 /// Default idle timeout for SSE stream reads (300 seconds = 5 minutes).
 /// After this period with no data, the stream is considered stalled and
 /// yields a recoverable error so the caller can retry.
@@ -62,7 +64,7 @@ use crate::llm_client::StreamEventBox;
 use crate::logging;
 use crate::models::{
     ContentBlock, ContentBlockStart, Delta, Message, MessageDelta, MessageRequest, MessageResponse,
-    StreamEvent, SystemPrompt, Tool, ToolCaller, Usage,
+    StreamEvent, SystemPrompt, Tool, ToolCaller, Usage, model_supports_reasoning,
 };
 
 use super::{
@@ -89,8 +91,9 @@ impl DeepSeekClient {
         request: &MessageRequest,
     ) -> Result<MessageResponse> {
         let messages = build_chat_messages_for_request_and_provider(request, self.api_provider);
+        let model = wire_model_for_provider(self.api_provider, &request.model);
         let mut body = json!({
-            "model": request.model,
+            "model": model,
             "messages": messages,
             "max_tokens": request.max_tokens,
         });
@@ -160,8 +163,9 @@ impl DeepSeekClient {
     ) -> Result<StreamEventBox> {
         // Try true SSE streaming via chat completions (widely supported)
         let messages = build_chat_messages_for_request_and_provider(&request, self.api_provider);
+        let model = wire_model_for_provider(self.api_provider, &request.model);
         let mut body = json!({
-            "model": request.model,
+            "model": model.clone(),
             "messages": messages,
             "max_tokens": request.max_tokens,
             "stream": true,
@@ -206,7 +210,7 @@ impl DeepSeekClient {
         // still produces a valid request.
         let replay_input_tokens = sanitize_thinking_mode_messages(
             &mut body,
-            &request.model,
+            &model,
             request.reasoning_effort.as_deref(),
             self.api_provider,
         );
@@ -228,7 +232,6 @@ impl DeepSeekClient {
             anyhow::bail!("SSE stream request failed: HTTP {status}: {error_text}");
         }
 
-        let model = request.model.clone();
         let api_provider = self.api_provider;
 
         // Capture transport-shape headers before we consume `response` into
@@ -280,7 +283,7 @@ impl DeepSeekClient {
             let mut last_event_at = std::time::Instant::now();
             let mut bytes_received: usize = 0;
 
-            loop {
+            'stream: loop {
                 let chunk_result = match tokio_timeout(idle, byte_stream.next()).await {
                     Ok(Some(result)) => result,
                     Ok(None) => break, // Stream ended normally
@@ -348,32 +351,32 @@ impl DeepSeekClient {
                         // Empty line = event boundary, process accumulated data
                         if !line_buf.is_empty() {
                             let data = std::mem::take(&mut line_buf);
-                            if data.trim() == "[DONE]" {
-                                // Stream complete
-                            } else if let Ok(chunk_json) = serde_json::from_str::<Value>(&data) {
-                                // Parse the SSE chunk into stream events
-                                for mut event in parse_sse_chunk(
-                                    &chunk_json,
-                                    &mut content_index,
-                                    &mut text_started,
-                                    &mut thinking_started,
-                                    &mut tool_indices,
-                                    is_reasoning_model,
-                                ) {
-                                    // Stamp the client-side replay-token estimate
-                                    // onto the final usage so the UI can surface
-                                    // it (#30). We compute it pre-request and
-                                    // overlay it on the server-reported usage at
-                                    // stream completion.
-                                    if let Some(tokens) = replay_input_tokens
-                                        && let StreamEvent::MessageDelta {
-                                            usage: Some(usage),
-                                            ..
-                                        } = &mut event
-                                    {
-                                        usage.reasoning_replay_tokens = Some(tokens);
+                            match parse_sse_data_frame(
+                                &data,
+                                &mut content_index,
+                                &mut text_started,
+                                &mut thinking_started,
+                                &mut tool_indices,
+                                is_reasoning_model,
+                            ) {
+                                SseDataFrame::Done => break 'stream,
+                                SseDataFrame::Events(events) => {
+                                    for mut event in events {
+                                        // Stamp the client-side replay-token estimate
+                                        // onto the final usage so the UI can surface
+                                        // it (#30). We compute it pre-request and
+                                        // overlay it on the server-reported usage at
+                                        // stream completion.
+                                        if let Some(tokens) = replay_input_tokens
+                                            && let StreamEvent::MessageDelta {
+                                                usage: Some(usage),
+                                                ..
+                                            } = &mut event
+                                        {
+                                            usage.reasoning_replay_tokens = Some(tokens);
+                                        }
+                                        yield Ok(event);
                                     }
-                                    yield Ok(event);
                                 }
                             }
                         }
@@ -1782,22 +1785,16 @@ fn should_replay_reasoning_content_for_provider(
 /// Should the SSE parser treat incoming `reasoning_content` deltas as thinking
 /// (vs. inlining them as answer text)?
 ///
-/// This is the streaming-path twin of `should_replay_reasoning_content_for_provider`:
-/// both must agree on whether a model is a DeepSeek-family reasoning model, or
-/// stream parsing stores reasoning tokens in `content` while the replay path
-/// expects them in `reasoning_content` (DeepSeek thinking-mode API 400s —
-/// #1739 / #1694). Like that predicate's model-aware gate, a known reasoning
-/// model is classified as such on ANY provider (including the generic `openai`
-/// provider used for DeepSeek-compatible endpoints); a genuine non-DeepSeek
-/// model is never reclassified, so #1542 is not regressed.
-///
-/// `provider_accepts_reasoning_content(provider) || requires_reasoning_content(model)`
-/// short-circuits to `requires_reasoning_content(model)` once the model gate
-/// already holds, so the effective rule is purely model-driven — kept explicit
-/// here to mirror the predicate above.
+/// DeepSeek-family models are classified on any provider because their API
+/// requires `reasoning_content` replay on later turns (#1739 / #1694). Other
+/// known reasoning-capable large models are classified only on providers whose
+/// streaming shape exposes reasoning fields, so `reasoning`/`reasoning_content`
+/// deltas become Thinking cells instead of leaking as normal answer text.
 fn is_reasoning_model_for_stream(provider: ApiProvider, model: &str) -> bool {
-    requires_reasoning_content(model)
-        && (provider_accepts_reasoning_content(provider) || requires_reasoning_content(model))
+    if requires_reasoning_content(model) {
+        return true;
+    }
+    provider_accepts_reasoning_content(provider) && model_supports_reasoning(model)
 }
 
 fn provider_accepts_reasoning_content(provider: ApiProvider) -> bool {
@@ -2020,6 +2017,38 @@ fn build_stream_events(response: &MessageResponse) -> Vec<StreamEvent> {
 }
 
 // === SSE Chunk Parser ===
+
+enum SseDataFrame {
+    Done,
+    Events(Vec<StreamEvent>),
+}
+
+fn parse_sse_data_frame(
+    data: &str,
+    content_index: &mut u32,
+    text_started: &mut bool,
+    thinking_started: &mut bool,
+    tool_indices: &mut std::collections::HashMap<u32, u32>,
+    is_reasoning_model: bool,
+) -> SseDataFrame {
+    if data.trim() == "[DONE]" {
+        return SseDataFrame::Done;
+    }
+    let events = serde_json::from_str::<Value>(data).map_or_else(
+        |_| Vec::new(),
+        |chunk_json| {
+            parse_sse_chunk(
+                &chunk_json,
+                content_index,
+                text_started,
+                thinking_started,
+                tool_indices,
+                is_reasoning_model,
+            )
+        },
+    );
+    SseDataFrame::Events(events)
+}
 
 /// Parse a single SSE chunk from the Chat Completions streaming API into
 /// our internal `StreamEvent` representation.
@@ -2470,6 +2499,45 @@ mod stream_decoder_tests {
     }
 
     #[test]
+    fn decoder_does_not_render_reasoning_as_text_for_known_provider_models() {
+        let mut content_index = 0u32;
+        let mut text_started = false;
+        let mut thinking_started = false;
+        let mut tool_indices = std::collections::HashMap::new();
+        let is_reasoning_model =
+            is_reasoning_model_for_stream(ApiProvider::XiaomiMimo, "mimo-v2.5-pro");
+        let events = parse_sse_chunk(
+            &serde_json::json!({
+                "choices": [{
+                    "delta": {
+                        "reasoning_content": "private plan"
+                    }
+                }]
+            }),
+            &mut content_index,
+            &mut text_started,
+            &mut thinking_started,
+            &mut tool_indices,
+            is_reasoning_model,
+        );
+
+        assert!(events.iter().any(|event| matches!(
+            event,
+            StreamEvent::ContentBlockDelta {
+                delta: Delta::ThinkingDelta { thinking },
+                ..
+            } if thinking == "private plan"
+        )));
+        assert!(!events.iter().any(|event| matches!(
+            event,
+            StreamEvent::ContentBlockDelta {
+                delta: Delta::TextDelta { text },
+                ..
+            } if text == "private plan"
+        )));
+    }
+
+    #[test]
     fn decoder_treats_reasoning_content_as_text_when_provider_does_not_support_reasoning() {
         let events = decode_chunk_with_reasoning(
             r#"{"choices":[{"delta":{"reasoning_content":"hello"}}]}"#,
@@ -2519,6 +2587,32 @@ mod stream_decoder_tests {
             events.is_empty(),
             "empty-choices chunk must produce no events; got {events:?}"
         );
+    }
+
+    #[test]
+    fn decoder_treats_done_frame_as_terminal() {
+        let mut content_index = 0u32;
+        let mut text_started = false;
+        let mut thinking_started = false;
+        let mut tool_indices = std::collections::HashMap::new();
+
+        let outcome = parse_sse_data_frame(
+            "  [DONE]  ",
+            &mut content_index,
+            &mut text_started,
+            &mut thinking_started,
+            &mut tool_indices,
+            true,
+        );
+
+        assert!(
+            matches!(outcome, SseDataFrame::Done),
+            "`data: [DONE]` must terminate the stream instead of waiting for the HTTP connection to close"
+        );
+        assert_eq!(content_index, 0);
+        assert!(!text_started);
+        assert!(!thinking_started);
+        assert!(tool_indices.is_empty());
     }
 
     #[test]
@@ -3337,6 +3431,28 @@ mod alias_thinking_detection_tests {
             ApiProvider::Deepseek,
             "deepseek-v4-pro"
         ));
+    }
+
+    #[test]
+    fn stream_classifies_known_large_reasoning_models_as_reasoning() {
+        // Xiaomi MiMo and OpenRouter/Qwen/Trinity can stream private reasoning through a
+        // `reasoning` delta without using a DeepSeek-looking model name. The
+        // renderer must still route that field into Thinking cells instead
+        // of plain assistant prose.
+        assert!(
+            is_reasoning_model_for_stream(ApiProvider::XiaomiMimo, "mimo-v2.5-pro"),
+            "mimo-v2.5-pro should stream reasoning as thinking on Xiaomi MiMo"
+        );
+        for model in [
+            "arcee-ai/trinity-large-thinking",
+            "minimax/minimax-m3",
+            "xiaomi/mimo-v2.5-pro",
+        ] {
+            assert!(
+                is_reasoning_model_for_stream(ApiProvider::Openrouter, model),
+                "{model} should stream reasoning as thinking on OpenRouter"
+            );
+        }
     }
 
     #[test]

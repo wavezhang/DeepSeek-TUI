@@ -1,5 +1,8 @@
 use super::*;
-use crate::config::{ApiProvider, Config, DEFAULT_TEXT_MODEL};
+use crate::config::{
+    ApiProvider, Config, DEFAULT_OPENROUTER_MODEL, DEFAULT_TEXT_MODEL, ProviderConfig,
+    ProvidersConfig,
+};
 use crate::config_ui::{self, WebConfigSession, WebConfigSessionEvent};
 use crate::core::engine::mock_engine_handle;
 use crate::tui::active_cell::ActiveCell;
@@ -2149,6 +2152,67 @@ async fn provider_switch_clears_turn_cache_history() {
 }
 
 #[tokio::test]
+async fn provider_switch_to_deepseek_canonicalizes_openrouter_default_model() {
+    let _home = SettingsHomeGuard::new();
+    let mut app = create_test_app();
+    app.api_provider = ApiProvider::Openrouter;
+    app.model = DEFAULT_OPENROUTER_MODEL.to_string();
+    let mut engine = mock_engine_handle();
+    let mut config = Config {
+        provider: Some("openrouter".to_string()),
+        api_key: Some("test-key".to_string()),
+        default_text_model: Some(DEFAULT_OPENROUTER_MODEL.to_string()),
+        ..Default::default()
+    };
+
+    switch_provider(
+        &mut app,
+        &mut engine.handle,
+        &mut config,
+        ApiProvider::Deepseek,
+        None,
+    )
+    .await;
+
+    assert_eq!(app.api_provider, ApiProvider::Deepseek);
+    assert!(!app.model_ids_passthrough);
+    assert_eq!(app.model, DEFAULT_TEXT_MODEL);
+}
+
+#[tokio::test]
+async fn provider_switch_to_openrouter_canonicalizes_deepseek_default_model() {
+    let _home = SettingsHomeGuard::new();
+    let mut app = create_test_app();
+    app.api_provider = ApiProvider::Deepseek;
+    app.model = DEFAULT_TEXT_MODEL.to_string();
+    let mut engine = mock_engine_handle();
+    let mut config = Config {
+        provider: Some("deepseek".to_string()),
+        default_text_model: Some(DEFAULT_TEXT_MODEL.to_string()),
+        providers: Some(ProvidersConfig {
+            openrouter: ProviderConfig {
+                api_key: Some("test-key".to_string()),
+                ..Default::default()
+            },
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+
+    switch_provider(
+        &mut app,
+        &mut engine.handle,
+        &mut config,
+        ApiProvider::Openrouter,
+        None,
+    )
+    .await;
+
+    assert_eq!(app.api_provider, ApiProvider::Openrouter);
+    assert_eq!(app.model, DEFAULT_OPENROUTER_MODEL);
+}
+
+#[tokio::test]
 async fn dispatch_user_message_failed_send_clears_loading_state() {
     let mut app = create_test_app();
     let engine = mock_engine_handle();
@@ -2442,6 +2506,55 @@ fn turn_liveness_leaves_active_turn_running() {
     assert!(!recovered);
     assert!(app.is_loading);
     assert!(app.turn_started_at.is_some());
+    assert!(app.status_toasts.is_empty());
+}
+
+#[test]
+fn turn_liveness_uses_recent_turn_activity_not_turn_start() {
+    let mut app = create_test_app();
+    let now = Instant::now();
+    app.is_loading = true;
+    app.runtime_turn_status = Some("in_progress".to_string());
+    app.turn_started_at = Some(now - TURN_STALL_WATCHDOG_TIMEOUT - Duration::from_secs(30));
+    app.turn_last_activity_at = Some(now - Duration::from_secs(1));
+
+    let recovered = reconcile_turn_liveness(&mut app, now, false);
+
+    assert!(!recovered);
+    assert!(app.is_loading);
+    assert!(app.runtime_turn_status.is_some());
+    assert!(app.status_toasts.is_empty());
+}
+
+#[test]
+fn turn_liveness_does_not_abort_running_tool() {
+    let mut app = create_test_app();
+    let now = Instant::now();
+    app.is_loading = true;
+    app.runtime_turn_status = Some("in_progress".to_string());
+    app.turn_started_at = Some(now - TURN_STALL_WATCHDOG_TIMEOUT - Duration::from_secs(30));
+    app.turn_last_activity_at = app.turn_started_at;
+    let mut active = ActiveCell::new();
+    active.push_tool(
+        "tool-1",
+        HistoryCell::Tool(ToolCell::Generic(GenericToolCell {
+            name: "edit_file".to_string(),
+            status: ToolStatus::Running,
+            input_summary: Some("path: CHANGELOG.md".to_string()),
+            output: None,
+            prompts: None,
+            spillover_path: None,
+            output_summary: None,
+            is_diff: false,
+        })),
+    );
+    app.active_cell = Some(active);
+
+    let recovered = reconcile_turn_liveness(&mut app, now, false);
+
+    assert!(!recovered);
+    assert!(app.is_loading);
+    assert!(app.active_cell.is_some());
     assert!(app.status_toasts.is_empty());
 }
 

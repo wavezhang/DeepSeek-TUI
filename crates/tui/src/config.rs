@@ -53,9 +53,9 @@ pub const OPENROUTER_GEMMA_4_31B_MODEL: &str = "google/gemma-4-31b-it";
 pub const OPENROUTER_GEMMA_4_26B_A4B_MODEL: &str = "google/gemma-4-26b-a4b-it";
 pub const OPENROUTER_GLM_5_1_MODEL: &str = "z-ai/glm-5.1";
 pub const OPENROUTER_KIMI_K2_6_MODEL: &str = "moonshotai/kimi-k2.6";
+pub const OPENROUTER_MINIMAX_M3_MODEL: &str = "minimax/minimax-m3";
 pub const OPENROUTER_NEMOTRON_3_NANO_OMNI_MODEL: &str =
     "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free";
-pub const OPENROUTER_QWEN_3_7_MAX_MODEL: &str = "qwen/qwen3.7-max";
 pub const OPENROUTER_QWEN_3_6_35B_A3B_MODEL: &str = "qwen/qwen3.6-35b-a3b";
 pub const OPENROUTER_QWEN_3_6_27B_MODEL: &str = "qwen/qwen3.6-27b";
 pub const OPENROUTER_TENCENT_HY3_PREVIEW_MODEL: &str = "tencent/hy3-preview";
@@ -63,7 +63,7 @@ pub const OPENROUTER_XIAOMI_MIMO_V2_5_PRO_MODEL: &str = "xiaomi/mimo-v2.5-pro";
 pub const OPENROUTER_XIAOMI_MIMO_V2_5_MODEL: &str = "xiaomi/mimo-v2.5";
 pub const RECENT_OPENROUTER_LARGE_MODELS: &[&str] = &[
     OPENROUTER_ARCEE_TRINITY_LARGE_THINKING_MODEL,
-    OPENROUTER_QWEN_3_7_MAX_MODEL,
+    OPENROUTER_MINIMAX_M3_MODEL,
     OPENROUTER_XIAOMI_MIMO_V2_5_PRO_MODEL,
     OPENROUTER_XIAOMI_MIMO_V2_5_MODEL,
     OPENROUTER_QWEN_3_6_35B_A3B_MODEL,
@@ -508,16 +508,12 @@ fn canonical_openrouter_recent_model_id(model: &str) -> Option<&'static str> {
         OPENROUTER_KIMI_K2_6_MODEL | "kimi-k2.6" | "kimi-k2-6" | "moonshot-kimi-k2.6" => {
             Some(OPENROUTER_KIMI_K2_6_MODEL)
         }
+        OPENROUTER_MINIMAX_M3_MODEL | "minimax-m3" | "minimax-m-3" => {
+            Some(OPENROUTER_MINIMAX_M3_MODEL)
+        }
         OPENROUTER_NEMOTRON_3_NANO_OMNI_MODEL
         | "nemotron-3-nano-omni"
         | "nemotron-3-nano-omni-reasoning" => Some(OPENROUTER_NEMOTRON_3_NANO_OMNI_MODEL),
-        OPENROUTER_QWEN_3_7_MAX_MODEL
-        | "qwen3.7"
-        | "qwen-3.7"
-        | "qwen3-7"
-        | "qwen3.7-max"
-        | "qwen-3.7-max"
-        | "qwen3-7-max" => Some(OPENROUTER_QWEN_3_7_MAX_MODEL),
         OPENROUTER_QWEN_3_6_35B_A3B_MODEL
         | "qwen3.6-35b-a3b"
         | "qwen-3.6-35b-a3b"
@@ -584,6 +580,15 @@ pub fn normalize_model_name_for_provider(provider: ApiProvider, model: &str) -> 
         return Some(model_for_provider(provider, canonical.to_string()));
     }
     Some(normalized)
+}
+
+#[must_use]
+pub fn wire_model_for_provider(provider: ApiProvider, model: &str) -> String {
+    let trimmed = model.trim();
+    if trimmed.is_empty() || provider_passes_model_through(provider) {
+        return trimmed.to_string();
+    }
+    normalize_model_name_for_provider(provider, trimmed).unwrap_or_else(|| trimmed.to_string())
 }
 
 #[must_use]
@@ -2088,9 +2093,9 @@ impl Config {
             return "auto".to_string();
         }
         if let Some(model) = self.default_text_model.as_deref()
-            && let Some(normalized) = normalize_model_name(model)
+            && let Some(normalized) = normalize_model_name_for_provider(provider, model)
         {
-            return model_for_provider(provider, normalized);
+            return normalized;
         }
 
         match provider {
@@ -3559,15 +3564,10 @@ fn normalize_model_config(config: &mut Config) {
 }
 
 fn normalize_model_for_provider(provider: ApiProvider, model: &str) -> Option<String> {
-    if matches!(provider, ApiProvider::Openrouter)
-        && let Some(canonical) = canonical_openrouter_recent_model_id(model)
-    {
-        return Some(canonical.to_string());
-    }
     if provider_passes_model_through(provider) {
         return None;
     }
-    normalize_model_name(model).map(|normalized| model_for_provider(provider, normalized))
+    normalize_model_name_for_provider(provider, model)
 }
 
 pub(crate) fn provider_passes_model_through(provider: ApiProvider) -> bool {
@@ -6431,6 +6431,53 @@ api_key = "old-openrouter-key"
     }
 
     #[test]
+    fn deepseek_default_model_canonicalizes_provider_prefixed_ids() {
+        let config = Config {
+            provider: Some("deepseek".to_string()),
+            default_text_model: Some(DEFAULT_OPENROUTER_MODEL.to_string()),
+            ..Default::default()
+        };
+        assert_eq!(config.default_model(), DEFAULT_TEXT_MODEL);
+
+        let config = Config {
+            provider: Some("deepseek".to_string()),
+            providers: Some(ProvidersConfig {
+                deepseek: ProviderConfig {
+                    model: Some(DEFAULT_OPENROUTER_MODEL.to_string()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert_eq!(config.default_model(), DEFAULT_TEXT_MODEL);
+    }
+
+    #[test]
+    fn wire_model_for_provider_matches_active_provider_shape() {
+        assert_eq!(
+            wire_model_for_provider(ApiProvider::Deepseek, DEFAULT_OPENROUTER_MODEL),
+            DEFAULT_TEXT_MODEL
+        );
+        assert_eq!(
+            wire_model_for_provider(ApiProvider::Openrouter, DEFAULT_TEXT_MODEL),
+            DEFAULT_OPENROUTER_MODEL
+        );
+        assert_eq!(
+            wire_model_for_provider(ApiProvider::NvidiaNim, DEFAULT_TEXT_MODEL),
+            DEFAULT_NVIDIA_NIM_MODEL
+        );
+        assert_eq!(
+            wire_model_for_provider(ApiProvider::Openai, DEFAULT_OPENROUTER_MODEL),
+            DEFAULT_OPENROUTER_MODEL
+        );
+        assert_eq!(
+            wire_model_for_provider(ApiProvider::Openrouter, OPENROUTER_MINIMAX_M3_MODEL),
+            OPENROUTER_MINIMAX_M3_MODEL
+        );
+    }
+
+    #[test]
     fn normalize_model_name_for_provider_keeps_provider_specific_ids() {
         assert_eq!(
             normalize_model_name_for_provider(ApiProvider::NvidiaNim, "deepseek-v4-pro").as_deref(),
@@ -6476,11 +6523,10 @@ api_key = "old-openrouter-key"
                 "trinity-large-thinking",
                 OPENROUTER_ARCEE_TRINITY_LARGE_THINKING_MODEL,
             ),
-            ("qwen3.7", OPENROUTER_QWEN_3_7_MAX_MODEL),
-            ("qwen3.7-max", OPENROUTER_QWEN_3_7_MAX_MODEL),
             ("qwen3.6-35b-a3b", OPENROUTER_QWEN_3_6_35B_A3B_MODEL),
             ("mimo-v2.5-pro", OPENROUTER_XIAOMI_MIMO_V2_5_PRO_MODEL),
             ("kimi-k2.6", OPENROUTER_KIMI_K2_6_MODEL),
+            ("minimax-m3", OPENROUTER_MINIMAX_M3_MODEL),
             ("gemma-4-31b-it", OPENROUTER_GEMMA_4_31B_MODEL),
             ("glm-5.1", OPENROUTER_GLM_5_1_MODEL),
         ] {
@@ -6507,8 +6553,8 @@ api_key = "old-openrouter-key"
             DEFAULT_OPENROUTER_MODEL,
             DEFAULT_OPENROUTER_FLASH_MODEL,
             OPENROUTER_ARCEE_TRINITY_LARGE_THINKING_MODEL,
-            OPENROUTER_QWEN_3_7_MAX_MODEL,
             OPENROUTER_XIAOMI_MIMO_V2_5_PRO_MODEL,
+            OPENROUTER_MINIMAX_M3_MODEL,
             OPENROUTER_QWEN_3_6_35B_A3B_MODEL,
             OPENROUTER_GEMMA_4_31B_MODEL,
         ] {
@@ -8598,8 +8644,8 @@ model = "deepseek-ai/deepseek-v4-pro"
                 262_144,
                 262_144,
             ),
-            (OPENROUTER_QWEN_3_7_MAX_MODEL, 1_000_000, 65_536),
             (OPENROUTER_XIAOMI_MIMO_V2_5_PRO_MODEL, 1_000_000, 131_072),
+            (OPENROUTER_MINIMAX_M3_MODEL, 1_000_000, 524_288),
         ] {
             let cap = provider_capability(ApiProvider::Openrouter, model);
 

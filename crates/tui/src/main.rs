@@ -433,6 +433,14 @@ fn join_prompt_parts(parts: &[String]) -> String {
     parts.join(" ")
 }
 
+fn resolve_exec_model(config: &Config, explicit_model: Option<&str>) -> String {
+    explicit_model
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| config.default_model())
+}
+
 fn top_level_prompt_initial_input(parts: &[String]) -> Option<tui::InitialInput> {
     (!parts.is_empty()).then(|| tui::InitialInput::Submit(join_prompt_parts(parts)))
 }
@@ -890,11 +898,7 @@ async fn main() -> Result<()> {
             }
             Commands::Exec(args) => {
                 let config = load_config_from_cli(&cli)?;
-                let model = args
-                    .model
-                    .clone()
-                    .or_else(|| config.default_text_model.clone())
-                    .unwrap_or_else(|| config.default_model());
+                let model = resolve_exec_model(&config, args.model.as_deref());
                 let prompt = join_prompt_parts(&args.prompt);
                 let workspace = cli.workspace.clone().unwrap_or_else(|| {
                     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
@@ -6086,6 +6090,31 @@ mod terminal_mode_tests {
     #[test]
     fn companion_binary_reports_its_own_name() {
         assert_eq!(Cli::command().get_name(), "codewhale-tui");
+    }
+
+    #[test]
+    fn exec_model_resolution_uses_provider_scoped_default() {
+        let config = Config {
+            provider: Some("openrouter".to_string()),
+            default_text_model: Some("deepseek/deepseek-v4-pro".to_string()),
+            providers: Some(crate::config::ProvidersConfig {
+                openrouter: crate::config::ProviderConfig {
+                    model: Some("arcee-ai/trinity-large-thinking".to_string()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            resolve_exec_model(&config, None),
+            "arcee-ai/trinity-large-thinking"
+        );
+        assert_eq!(
+            resolve_exec_model(&config, Some("arcee-ai/trinity-large-thinking")),
+            "arcee-ai/trinity-large-thinking"
+        );
     }
 
     #[test]

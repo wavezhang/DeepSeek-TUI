@@ -198,19 +198,6 @@ impl Default for ModelRegistry {
                 supports_reasoning: true,
             },
             ModelInfo {
-                id: "qwen/qwen3.7-max".to_string(),
-                provider: ProviderKind::Openrouter,
-                aliases: vec![
-                    "qwen3.7".to_string(),
-                    "qwen-3.7".to_string(),
-                    "qwen3-7".to_string(),
-                    "qwen3.7-max".to_string(),
-                    "qwen-3.7-max".to_string(),
-                ],
-                supports_tools: true,
-                supports_reasoning: true,
-            },
-            ModelInfo {
                 id: "xiaomi/mimo-v2.5-pro".to_string(),
                 provider: ProviderKind::Openrouter,
                 aliases: vec![
@@ -251,6 +238,17 @@ impl Default for ModelRegistry {
                 id: "moonshotai/kimi-k2.6".to_string(),
                 provider: ProviderKind::Openrouter,
                 aliases: vec!["openrouter-kimi-k2.6".to_string()],
+                supports_tools: true,
+                supports_reasoning: true,
+            },
+            ModelInfo {
+                id: "minimax/minimax-m3".to_string(),
+                provider: ProviderKind::Openrouter,
+                aliases: vec![
+                    "minimax-m3".to_string(),
+                    "minimax-m-3".to_string(),
+                    "openrouter-minimax-m3".to_string(),
+                ],
                 supports_tools: true,
                 supports_reasoning: true,
             },
@@ -734,11 +732,10 @@ mod tests {
 
         for (alias, expected) in [
             ("trinity-large-thinking", "arcee-ai/trinity-large-thinking"),
-            ("qwen3.7", "qwen/qwen3.7-max"),
-            ("qwen3.7-max", "qwen/qwen3.7-max"),
             ("qwen3.6-35b-a3b", "qwen/qwen3.6-35b-a3b"),
             ("gemma-4-31b-it", "google/gemma-4-31b-it"),
             ("glm-5.1", "z-ai/glm-5.1"),
+            ("minimax-m3", "minimax/minimax-m3"),
             ("openrouter-mimo-v2.5-pro", "xiaomi/mimo-v2.5-pro"),
             ("openrouter-kimi-k2.6", "moonshotai/kimi-k2.6"),
         ] {

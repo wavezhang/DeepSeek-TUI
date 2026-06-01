@@ -221,34 +221,39 @@ pub fn flush_and_sync(writer: &mut std::io::BufWriter<std::fs::File>) -> std::io
 /// the codebase should use this instead of hardcoding `Command::new("open")`,
 /// `Command::new("xdg-open")`, or `Command::new("cmd")`.
 pub fn open_url(url: &str) -> Result<()> {
+    let mut command = browser_open_command(url)?;
+    command
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| anyhow::anyhow!("failed to launch browser command: {e}"))
+}
+
+fn browser_open_command(url: &str) -> Result<Command> {
+    if url.trim().is_empty() {
+        return Err(anyhow::anyhow!("browser URL cannot be empty"));
+    }
+
     #[cfg(target_os = "macos")]
-    let mut command = Command::new("open");
+    {
+        let mut command = Command::new("open");
+        command.arg(url);
+        Ok(command)
+    }
+
     #[cfg(target_os = "linux")]
-    let mut command = Command::new("xdg-open");
+    {
+        let mut command = Command::new("xdg-open");
+        command.arg(url);
+        Ok(command)
+    }
+
     #[cfg(target_os = "windows")]
-    let _command = {
+    {
         let mut cmd = Command::new("cmd");
         cmd.args(["/C", "start", "", url]);
-        return match cmd
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-        {
-            Ok(_) => Ok(()),
-            Err(e) => Err(anyhow::anyhow!("failed to launch browser command: {e}")),
-        };
-    };
-
-    // macOS / Linux path
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
-    {
-        command.arg(url);
-        command
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .map(|_| ())
-            .map_err(|e| anyhow::anyhow!("failed to launch browser command: {e}"))
+        return Ok(cmd);
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
@@ -828,36 +833,56 @@ mod project_mapping_tests {
     // ===================================================================
 
     #[test]
-    fn open_url_does_not_panic_on_valid_url() {
-        // We can't open a browser in CI, but we can verify the function
-        // doesn't panic and returns a Result (either Ok or Err with a
-        // meaningful message).
-        let result = super::open_url("https://example.com");
-        match result {
-            Ok(()) => {} // browser opened — fine
-            Err(e) => {
-                let msg = e.to_string();
-                // The error must contain something about "browser" or
-                // "unsupported" — not a random panic message.
-                assert!(
-                    msg.contains("browser")
-                        || msg.contains("unsupported")
-                        || msg.contains("failed"),
-                    "unexpected error message: {msg}"
-                );
-            }
+    fn open_url_builds_platform_command_without_spawning() {
+        let command = super::browser_open_command("https://example.com").expect("command");
+
+        #[cfg(target_os = "macos")]
+        {
+            assert_eq!(command.get_program(), "open");
+            assert_eq!(
+                command
+                    .get_args()
+                    .map(|arg| arg.to_string_lossy().into_owned())
+                    .collect::<Vec<_>>(),
+                vec!["https://example.com"]
+            );
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            assert_eq!(command.get_program(), "xdg-open");
+            assert_eq!(
+                command
+                    .get_args()
+                    .map(|arg| arg.to_string_lossy().into_owned())
+                    .collect::<Vec<_>>(),
+                vec!["https://example.com"]
+            );
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            assert_eq!(command.get_program(), "cmd");
+            assert_eq!(
+                command
+                    .get_args()
+                    .map(|arg| arg.to_string_lossy().into_owned())
+                    .collect::<Vec<_>>(),
+                vec!["/C", "start", "", "https://example.com"]
+            );
         }
     }
 
     #[test]
     fn open_url_rejects_empty_url_gracefully() {
         // An empty URL should fail with a clear error, not panic.
-        let result = super::open_url("");
+        let result = super::browser_open_command("");
         match result {
-            Ok(()) => {} // some openers might accept empty string
+            Ok(_) => panic!("empty URL should not build an opener command"),
             Err(e) => {
                 let msg = e.to_string();
                 assert!(!msg.is_empty(), "error message must not be empty");
+                assert!(msg.contains("empty"), "unexpected error message: {msg}");
             }
         }
     }

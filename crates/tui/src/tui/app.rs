@@ -1448,6 +1448,10 @@ pub struct App {
     pub submit_pending_steers_after_interrupt: bool,
     /// Start time for current turn
     pub turn_started_at: Option<Instant>,
+    /// Most recent engine event observed for the current turn. This is
+    /// separate from `turn_started_at` because the latter drives elapsed-time
+    /// UI and must not be reset during long but healthy turns.
+    pub turn_last_activity_at: Option<Instant>,
     /// Sum of completed turn durations for this `App` instance (#448
     /// follow-up). Drives the footer's `worked Nh Mm` chip so the
     /// label reflects actual model work, not wall-clock since launch.
@@ -2059,6 +2063,7 @@ impl App {
             rejected_steers: VecDeque::new(),
             submit_pending_steers_after_interrupt: false,
             turn_started_at: None,
+            turn_last_activity_at: None,
             cumulative_turn_duration: std::time::Duration::ZERO,
             balance_cell: std::sync::Arc::new(std::sync::Mutex::new(None)),
             balance_initiated: false,
@@ -5452,6 +5457,13 @@ mod tests {
 
     #[test]
     fn app_new_with_explicit_api_key_does_not_trigger_onboarding() {
+        let _lock = lock_test_env();
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let config_path = tmp.path().join("config.toml");
+        let _config_path = EnvVarGuard::set("DEEPSEEK_CONFIG_PATH", &config_path);
+        let _provider_env = EnvVarGuard::remove("CODEWHALE_PROVIDER");
+        let _legacy_provider_env = EnvVarGuard::remove("DEEPSEEK_PROVIDER");
+
         let config = Config {
             api_key: Some("sk-test-onboarding-key".to_string()),
             ..Config::default()

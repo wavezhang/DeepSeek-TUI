@@ -1027,7 +1027,7 @@ fn bool_str(value: bool) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Config;
+    use crate::config::{ApiProvider, Config};
     use crate::test_support::lock_test_env;
     use crate::tui::app::{App, TuiOptions};
     use std::fs;
@@ -1058,7 +1058,16 @@ mod tests {
             resume_session_id: None,
             initial_input: None,
         };
-        App::new(options, &Config::default())
+        let mut app = App::new(options, &Config::default());
+        // App::new merges developer-local settings, which can include a saved
+        // provider/model from the interactive TUI. Keep these config UI tests
+        // pinned to DeepSeek defaults so they only exercise document apply
+        // semantics.
+        app.model = "deepseek-v4-pro".to_string();
+        app.auto_model = false;
+        app.api_provider = ApiProvider::Deepseek;
+        app.model_ids_passthrough = false;
+        app
     }
 
     #[test]

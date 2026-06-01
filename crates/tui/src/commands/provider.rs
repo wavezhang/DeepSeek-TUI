@@ -4,7 +4,10 @@
 //! `/provider` with no args opens the picker modal (#52). `/provider <name>`
 //! keeps the v0.6.6 CLI form for muscle-memory + scripted use.
 
-use crate::config::{ApiProvider, normalize_model_name, provider_passes_model_through};
+use crate::config::{
+    ApiProvider, normalize_model_name, normalize_model_name_for_provider,
+    provider_passes_model_through,
+};
 use crate::tui::app::{App, AppAction};
 
 use super::CommandResult;
@@ -34,14 +37,22 @@ pub fn provider(app: &mut App, args: Option<&str>) -> CommandResult {
     let model = match model_arg {
         None => None,
         Some(raw) if provider_passes_model_through(target) => Some(raw.trim().to_string()),
-        Some(raw) => match normalize_model_name(&expand_model_alias(raw)) {
-            Some(normalized) => Some(normalized),
-            None => {
-                return CommandResult::error(format!(
-                    "Invalid model '{raw}'. Try: flash, pro, deepseek-v4-flash, deepseek-v4-pro."
-                ));
+        Some(raw) => {
+            let expanded = expand_model_alias(raw);
+            let normalized = if matches!(target, ApiProvider::Deepseek | ApiProvider::DeepseekCN) {
+                normalize_model_name_for_provider(target, &expanded)
+            } else {
+                normalize_model_name(&expanded)
+            };
+            match normalized {
+                Some(normalized) => Some(normalized),
+                None => {
+                    return CommandResult::error(format!(
+                        "Invalid model '{raw}'. Try: flash, pro, deepseek-v4-flash, deepseek-v4-pro."
+                    ));
+                }
             }
-        },
+        }
     };
 
     if target == app.api_provider && model.is_none() {
@@ -304,6 +315,22 @@ mod tests {
             Some(AppAction::SwitchProvider { provider, model }) => {
                 assert_eq!(provider, ApiProvider::Deepseek);
                 assert_eq!(model.as_deref(), Some("deepseek-v4-flash"));
+            }
+            other => panic!("expected SwitchProvider action, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn switch_to_deepseek_canonicalizes_provider_prefixed_model_override() {
+        let mut app = create_test_app();
+        app.api_provider = ApiProvider::Openrouter;
+
+        let result = provider(&mut app, Some("deepseek deepseek/deepseek-v4-pro"));
+
+        match result.action {
+            Some(AppAction::SwitchProvider { provider, model }) => {
+                assert_eq!(provider, ApiProvider::Deepseek);
+                assert_eq!(model.as_deref(), Some("deepseek-v4-pro"));
             }
             other => panic!("expected SwitchProvider action, got {other:?}"),
         }

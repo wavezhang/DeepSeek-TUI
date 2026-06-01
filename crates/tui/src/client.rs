@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::Mutex as AsyncMutex;
 
-use crate::config::{ApiProvider, Config, RetryPolicy};
+use crate::config::{ApiProvider, Config, RetryPolicy, wire_model_for_provider};
 use crate::llm_client::{
     LlmClient, LlmError, RetryConfig as LlmRetryConfig, extract_retry_after, with_retry,
 };
@@ -589,6 +589,7 @@ impl DeepSeekClient {
         target_language: &str,
     ) -> Result<String> {
         let url = api_url(&self.base_url, "chat/completions");
+        let model = wire_model_for_provider(self.api_provider, model);
         let mut body = serde_json::json!({
             "model": model,
             "messages": [
@@ -1099,6 +1100,7 @@ impl DeepSeekClient {
         max_tokens: u32,
     ) -> anyhow::Result<String> {
         let url = api_url(&self.base_url, "beta/completions");
+        let model = wire_model_for_provider(self.api_provider, model);
         let body = json!({
             "model": model,
             "prompt": prompt,

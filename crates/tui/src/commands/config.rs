@@ -1480,7 +1480,15 @@ mod tests {
             resume_session_id: None,
             initial_input: None,
         };
-        App::new(options, &Config::default())
+        let mut app = App::new(options, &Config::default());
+        // App::new folds in saved TUI settings from the developer machine.
+        // Pin command tests back to DeepSeek semantics so model aliases are
+        // not normalized through a provider selected in an interactive run.
+        app.model = "test-model".to_string();
+        app.auto_model = false;
+        app.api_provider = crate::config::ApiProvider::Deepseek;
+        app.model_ids_passthrough = false;
+        app
     }
 
     #[test]
