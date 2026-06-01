@@ -294,12 +294,7 @@ impl ToolContext {
         }
     }
 
-    /// Skip TLS certificate verification for outbound HTTPS requests.
-    #[must_use]
-    pub fn with_insecure_skip_tls_verify(mut self, skip: bool) -> Self {
-        self.insecure_skip_tls_verify = skip;
-        self
-    }
+
 
     /// Attach a per-domain network policy to this context (#135).
     #[must_use]
