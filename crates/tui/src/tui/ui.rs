@@ -723,6 +723,7 @@ fn build_engine_config(app: &App, config: &Config) -> EngineConfig {
         notes_path: config.notes_path(),
         mcp_config_path: config.mcp_config_path(),
         skills_dir: app.skills_dir.clone(),
+        insecure_skip_tls_verify: config.insecure_skip_tls_verify_for_provider(app.api_provider),
         instructions: config
             .instructions_paths()
             .into_iter()
