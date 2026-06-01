@@ -20,6 +20,22 @@ use std::io::Write;
 
 /// Run the self-update workflow.
 pub fn run_update(beta: bool, check_only: bool, proxy_arg: Option<String>, skip_verify: bool) -> Result<()> {
+    if skip_verify {
+        // Safety: when TLS verification is disabled, a MITM attacker can serve
+        // a crafted release manifest + matching checksum + malicious binary.
+        // The SHA256 integrity check provides no protection because both the
+        // manifest and the asset travel over the same compromised transport.
+        // Refuse to proceed — the update channel must remain trust-on-first-use
+        // (TOFU) resistant even when the user has opted into insecure TLS for
+        // other outbound requests (web_search, fetch_url, etc.).
+        anyhow::bail!(
+            "insecure_skip_tls_verify is not supported for `codewhale update`. \
+             TLS certificate verification is required to protect the integrity of \
+             the self-update payload. Set `insecure_skip_tls_verify = false` (the \
+             default) or unset the environment variable to proceed."
+        );
+    }
+
     let current_exe =
         std::env::current_exe().context("failed to determine current executable path")?;
     let targets = update_targets_for_exe(&current_exe);
