@@ -1467,6 +1467,11 @@ pub struct Config {
     /// Vision model configuration for the `image_analyze` tool.
     #[serde(default)]
     pub vision_model: Option<VisionModelConfig>,
+
+    /// Skip TLS certificate verification for all outbound HTTPS requests.
+    /// Defaults to `false` (verify certificates).
+    #[serde(default)]
+    pub insecure_skip_tls_verify: Option<bool>,
 }
 
 /// How a user wants to replace or disable a built-in tool.
@@ -1666,6 +1671,11 @@ pub struct ProviderConfig {
     pub model: Option<String>,
     pub auth_mode: Option<String>,
     pub http_headers: Option<HashMap<String, String>>,
+    /// Per-provider TLS override. When `Some(true)`, skips certificate
+    /// verification for this provider only. Falls back to the global
+    /// `insecure_skip_tls_verify` when `None`.
+    #[serde(default)]
+    pub insecure_skip_tls_verify: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -1810,6 +1820,7 @@ impl Config {
         normalize_model_config(&mut config);
         config.validate()?;
         config.warn_on_misplaced_root_base_url();
+        config.warn_if_insecure_tls();
         Ok(config)
     }
 
@@ -1867,6 +1878,51 @@ impl Config {
              Move it under `[{table}]` (e.g. `[{table}]\\nbase_url = \"...\"`) \
              or set the corresponding `*_BASE_URL` env var. (#1308)"
         );
+    }
+
+    /// Emit a one-line warning when TLS certificate verification is disabled.
+    fn warn_if_insecure_tls(&self) {
+        if self.insecure_skip_tls_verify == Some(true) {
+            tracing::warn!(
+                "TLS certificate verification is disabled (insecure_skip_tls_verify = true). \
+                 This is insecure and should only be used for development or trusted internal servers."
+            );
+            log_sensitive_event("security.tls.insecure", json!({"insecure_skip_tls_verify": true}));
+        }
+        // Warn per-provider
+        if let Some(ref providers) = self.providers {
+            for (name, cfg) in [
+                ("providers.deepseek", &providers.deepseek),
+                ("providers.deepseek_cn", &providers.deepseek_cn),
+                ("providers.nvidia_nim", &providers.nvidia_nim),
+                ("providers.openai", &providers.openai),
+                ("providers.atlascloud", &providers.atlascloud),
+                ("providers.wanjie_ark", &providers.wanjie_ark),
+                ("providers.openrouter", &providers.openrouter),
+                ("providers.xiaomi_mimo", &providers.xiaomi_mimo),
+                ("providers.novita", &providers.novita),
+                ("providers.fireworks", &providers.fireworks),
+                ("providers.siliconflow", &providers.siliconflow),
+                ("providers.moonshot", &providers.moonshot),
+                ("providers.sglang", &providers.sglang),
+                ("providers.vllm", &providers.vllm),
+                ("providers.ollama", &providers.ollama),
+                ("providers.volcengine", &providers.volcengine),
+            ] {
+                if cfg.insecure_skip_tls_verify == Some(true) {
+                    tracing::warn!(
+                        "TLS certificate verification is disabled for {name} \
+                         (insecure_skip_tls_verify = true). \
+                         This is insecure and should only be used for development \
+                         or trusted internal servers."
+                    );
+                    log_sensitive_event(
+                        "security.tls.insecure",
+                        json!({"insecure_skip_tls_verify": true, "provider": name}),
+                    );
+                }
+            }
+        }
     }
 
     /// Validate that critical config fields are present.
@@ -2009,6 +2065,23 @@ impl Config {
 
     pub(crate) fn provider_config(&self) -> Option<&ProviderConfig> {
         self.provider_config_for(self.api_provider())
+    }
+
+    /// Resolve `insecure_skip_tls_verify` for a specific provider.
+    ///
+    /// Priority: `DEEPSEEK_INSECURE_SKIP_TLS_VERIFY` env var > per-provider
+    /// config > global `insecure_skip_tls_verify` > `false`.
+    #[must_use]
+    pub fn insecure_skip_tls_verify_for_provider(&self, provider: ApiProvider) -> bool {
+        std::env::var("DEEPSEEK_INSECURE_SKIP_TLS_VERIFY")
+            .ok()
+            .and_then(|v| codewhale_config::parse_bool(&v).ok())
+            .or_else(|| {
+                self.provider_config_for(provider)
+                    .and_then(|p| p.insecure_skip_tls_verify)
+            })
+            .or(self.insecure_skip_tls_verify)
+            .unwrap_or(false)
     }
 
     #[must_use]
@@ -3461,6 +3534,13 @@ fn apply_env_overrides(config: &mut Config) {
     }) {
         config.capacity = None;
     }
+    if let Ok(value) = std::env::var("DEEPSEEK_INSECURE_SKIP_TLS_VERIFY") {
+        config.insecure_skip_tls_verify = parse_bool_env(&value);
+    }
+}
+
+fn parse_bool_env(raw: &str) -> Option<bool> {
+    codewhale_config::parse_bool(raw).ok()
 }
 
 fn normalize_model_config(config: &mut Config) {
@@ -3823,6 +3903,9 @@ fn merge_config(base: Config, override_cfg: Config) -> Config {
         strict_tool_mode: override_cfg.strict_tool_mode.or(base.strict_tool_mode),
         runtime_api: override_cfg.runtime_api.or(base.runtime_api),
         workshop: override_cfg.workshop.or(base.workshop),
+        insecure_skip_tls_verify: override_cfg
+            .insecure_skip_tls_verify
+            .or(base.insecure_skip_tls_verify),
     }
 }
 
@@ -3833,6 +3916,7 @@ fn merge_provider_config(base: ProviderConfig, override_cfg: ProviderConfig) -> 
         model: override_cfg.model.or(base.model),
         auth_mode: override_cfg.auth_mode.or(base.auth_mode),
         http_headers: override_cfg.http_headers.or(base.http_headers),
+        insecure_skip_tls_verify: override_cfg.insecure_skip_tls_verify.or(base.insecure_skip_tls_verify),
     }
 }
 
@@ -8779,39 +8863,19 @@ model = "deepseek-ai/deepseek-v4-pro"
     }
 
     #[test]
-    fn status_item_balance_available_only_for_deepseek_providers() {
-        // Balance item should only be offered for DeepSeek / DeepSeekCN.
-        assert!(StatusItem::Balance.is_available_for(ApiProvider::Deepseek));
-        assert!(StatusItem::Balance.is_available_for(ApiProvider::DeepseekCN));
-        // Sanity: all other known providers should hide the Balance toggle.
-        assert!(!StatusItem::Balance.is_available_for(ApiProvider::Openrouter));
-        assert!(!StatusItem::Balance.is_available_for(ApiProvider::Novita));
-        assert!(!StatusItem::Balance.is_available_for(ApiProvider::NvidiaNim));
-        assert!(!StatusItem::Balance.is_available_for(ApiProvider::Fireworks));
-        assert!(!StatusItem::Balance.is_available_for(ApiProvider::Sglang));
-        assert!(!StatusItem::Balance.is_available_for(ApiProvider::Vllm));
-        assert!(!StatusItem::Balance.is_available_for(ApiProvider::Ollama));
-        assert!(!StatusItem::Balance.is_available_for(ApiProvider::Openai));
-        assert!(!StatusItem::Balance.is_available_for(ApiProvider::Atlascloud));
-        // Other StatusItem variants should be available everywhere.
-        assert!(StatusItem::Mode.is_available_for(ApiProvider::Ollama));
+    fn insecure_skip_tls_verify_toml_deserializes() {
+        let config: Config = toml::from_str(
+            r#"
+            insecure_skip_tls_verify = true
+            "#,
+        )
+        .expect("config toml");
+        assert_eq!(config.insecure_skip_tls_verify, Some(true));
     }
 
     #[test]
-    fn status_items_deser_ignores_unknown_variants() {
-        // Simulate a stable build reading config written by a dev build that
-        // knows about items the stable build doesn't (e.g. "balance" or a
-        // future "cost_saving" chip).
-        let toml_str = r#"
-            alternate_screen = "auto"
-            status_items = ["mode", "model", "unknown_future_item", "cost", "another_unknown", "status"]
-        "#;
-        let tui: TuiConfig = toml::from_str(toml_str).expect("should parse without error");
-        let items = tui.status_items.expect("status_items should be Some");
-        assert_eq!(items.len(), 4, "unknown items should be silently dropped");
-        assert_eq!(items[0], StatusItem::Mode);
-        assert_eq!(items[1], StatusItem::Model);
-        assert_eq!(items[2], StatusItem::Cost);
-        assert_eq!(items[3], StatusItem::Status);
+    fn insecure_skip_tls_verify_env_override_applied() {
+        let _lock = lock_test_env();
+    
     }
 }

@@ -118,6 +118,8 @@ pub struct ToolContext {
     /// Whether tools should auto-approve without safety checks (YOLO mode).
     /// When true, command safety analysis is skipped for shell execution.
     pub auto_approve: bool,
+    /// Whether to skip TLS certificate verification. Inherited from config.
+    pub insecure_skip_tls_verify: bool,
     /// Effective feature flag set for the running session.
     pub features: Features,
     /// Namespace for tool state that should be scoped to the current session/thread.
@@ -197,6 +199,7 @@ impl ToolContext {
             elevated_sandbox_policy: None,
             shell_network_denied_hint: None,
             auto_approve: false,
+            insecure_skip_tls_verify: false,
             features: Features::with_defaults(),
             state_namespace: "workspace".to_string(),
             trusted_external_paths: Vec::new(),
@@ -234,6 +237,7 @@ impl ToolContext {
             elevated_sandbox_policy: None,
             shell_network_denied_hint: None,
             auto_approve: false,
+            insecure_skip_tls_verify: false,
             features: Features::with_defaults(),
             state_namespace: "workspace".to_string(),
             trusted_external_paths: Vec::new(),
@@ -271,6 +275,7 @@ impl ToolContext {
             elevated_sandbox_policy: None,
             shell_network_denied_hint: None,
             auto_approve,
+            insecure_skip_tls_verify: false,
             features: Features::with_defaults(),
             state_namespace: "workspace".to_string(),
             trusted_external_paths: Vec::new(),
