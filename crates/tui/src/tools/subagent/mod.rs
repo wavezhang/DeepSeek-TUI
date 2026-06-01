@@ -4782,6 +4782,7 @@ impl SubAgentToolRegistry {
             runtime.manager.clone(),
             runtime.clone(),
             runtime.allow_shell,
+            runtime.context.insecure_skip_tls_verify,
             todo_list,
             plan_state,
         );

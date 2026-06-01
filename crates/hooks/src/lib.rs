@@ -183,10 +183,15 @@ pub struct WebhookHookSink {
 
 impl WebhookHookSink {
     /// Create a new sink that sends events to the given `url`.
-    pub fn new(url: String) -> Self {
+    /// `skip_verify` disables TLS certificate verification for the outbound
+    /// webhook connection — only enable this for trusted internal endpoints.
+    pub fn new(url: String, skip_verify: bool) -> Self {
         Self {
             url,
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .danger_accept_invalid_certs(skip_verify)
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new()),
         }
     }
 }

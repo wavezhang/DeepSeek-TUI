@@ -55,7 +55,7 @@ impl Engine {
                 .with_goal_tools(self.config.goal_state.clone())
         } else {
             ToolRegistryBuilder::new()
-                .with_agent_tools(self.session.allow_shell)
+                .with_agent_tools(self.session.allow_shell, self.config.insecure_skip_tls_verify)
                 .with_todo_tool(todo_list)
                 .with_plan_tool(plan_state)
                 .with_goal_tools(self.config.goal_state.clone())
@@ -85,7 +85,7 @@ impl Engine {
             builder = builder.with_patch_tools();
         }
         if self.config.features.enabled(Feature::WebSearch) {
-            builder = builder.with_web_tools();
+            builder = builder.with_web_tools(self.config.insecure_skip_tls_verify);
         }
         // Shell tools (exec_shell, task_shell_start, etc.) are already gated
         // behind `allow_shell` inside `with_agent_tools`. No separate
@@ -102,7 +102,7 @@ impl Engine {
         if self.config.features.enabled(Feature::VisionModel)
             && let Some(ref vision_config) = self.config.vision_config
         {
-            builder = builder.with_vision_tools(vision_config.clone());
+            builder = builder.with_vision_tools(vision_config.clone(), self.config.insecure_skip_tls_verify);
         }
 
         // Register the `notify` tool unconditionally (#1322). It has no
