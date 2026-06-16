@@ -111,7 +111,7 @@ jobs:
         include:
           # --- codewhale (cli dispatcher, canonical) ---
           - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
+            target: x86_64-unknown-linux-musl
             binary: codewhale
             artifact_name: codewhale-linux-x64
           - os: ubuntu-latest
@@ -136,7 +136,7 @@ jobs:
             artifact_name: codewhale-windows-x64.exe
           # --- codewhale-tui (TUI runtime, canonical) ---
           - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
+            target: x86_64-unknown-linux-musl
             binary: codewhale-tui
             artifact_name: codewhale-tui-linux-x64
           - os: ubuntu-latest
@@ -214,7 +214,15 @@ jobs:
           sudo dpkg --add-architecture arm64
           sudo apt-get update -o Dir::Etc::sourcelist=/etc/apt/sources.list.d/arm64.sources -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0
           sudo apt-get install -y gcc-aarch64-linux-gnu libc6-dev-arm64-cross libdbus-1-dev:arm64 pkg-config
+      - name: Build static Linux x64 binary
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        shell: bash
+        run: |
+          sudo apt-get install -y musl-tools
+          rustup target add x86_64-unknown-linux-musl
+          cargo build --release --locked --target x86_64-unknown-linux-musl -p codewhale -p codewhale-tui
       - name: Build
+        if: matrix.target != 'x86_64-unknown-linux-musl'
         shell: bash
         env:
           DEEPSEEK_BUILD_SHA: ${{ needs.resolve.outputs.sha }}
